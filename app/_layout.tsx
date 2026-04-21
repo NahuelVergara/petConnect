@@ -23,12 +23,37 @@ function RootLayoutNav() {
   useEffect(() => {
     let isMounted = true;
 
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    const handleSessionTimeout = (session: any) => {
+      if (!session) return;
+
+      // session.expires_at está en segundos (Unix timestamp)
+      const expiresAt = session.expires_at * 1000;
+      const timeRemaining = expiresAt - Date.now();
+
+      if (timeRemaining <= 0) {
+        // Ya expiró la hora original, cerrar de inmediato
+        supabase.auth.signOut();
+      } else {
+        // Aún queda tiempo de la hora original, programar el cierre por el tiempo restante exacto
+        if (timeoutId) clearTimeout(timeoutId);
+        timeoutId = setTimeout(async () => {
+          await supabase.auth.signOut();
+        }, timeRemaining);
+      }
+    };
+
     const checkAuth = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
       if (!isMounted) return;
+
+      if (session) {
+        handleSessionTimeout(session);
+      }
 
       const inAuthGroup = segments[0] === "(tabs)";
       // Solo hacer el chequeo si el enrutador ya montó los segmentos iniciales
@@ -48,7 +73,6 @@ function RootLayoutNav() {
 
     checkAuth();
 
-    let timeoutId: NodeJS.Timeout | null = null;
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         if (!isMounted) return;
@@ -57,11 +81,8 @@ function RootLayoutNav() {
           clearTimeout(timeoutId);
         }
 
-        // Si existe una sesión activa, programar un cierre forzado después de 1 hora exacta (3600000 ms)
         if (session) {
-          timeoutId = setTimeout(async () => {
-            await supabase.auth.signOut();
-          }, 3600000);
+          handleSessionTimeout(session);
         }
 
         const inAuthGroup = segments[0] === "(tabs)";

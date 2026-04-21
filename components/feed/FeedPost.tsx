@@ -794,7 +794,8 @@ const styles = StyleSheet.create({
     padding: 16,
     marginHorizontal: 20,
     marginBottom: 20,
-    elevation: 3,
+    shadowColor: "transparent",
+    elevation: 0,
   },
   postHeader: {
     flexDirection: "row",

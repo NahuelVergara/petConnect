@@ -3,15 +3,27 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+// Expo Go en SDK 53+ ya no soporta notificaciones remotas en Android.
+// Se captura esto para evitar que la aplicación arroje error al estar probando en Expo Go.
+if (Constants.appOwnership !== "expo") {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+}
 
 export async function registerForPushNotificationsAsync() {
+  // Si estamos en Expo Go, evitamos ejectutar cualquier lógica de Notificaciones
+  if (Constants.appOwnership === "expo") {
+    console.warn(
+      "Las Push Notifications no están soportadas dentro de Expo Go en SDK 53+. Usando un entorno de desarrollo en su lugar.",
+    );
+    return null;
+  }
+
   let token;
 
   if (Platform.OS === "android") {

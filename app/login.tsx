@@ -1,5 +1,7 @@
 import { FontAwesome5 } from "@expo/vector-icons";
+import * as ExpoLinking from "expo-linking";
 import { Link, useRouter } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -24,17 +26,63 @@ const COLORS = {
   linkBlue: "#165D8B",
 };
 
+WebBrowser.maybeCompleteAuthSession();
+
 export default function LoginScreen() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [genericAlert, setGenericAlert] = useState<{
     title: string;
     message: string;
   } | null>(null);
 
+  // Función para procesar y extraer tokens de una URL (venga de WebBrowser o de Deep Link)
+  const processAuthUrl = async (url: string) => {
+    if (!url) return;
+    const paramsStr = url.split("#")[1] || url.split("?")[1];
+    if (paramsStr) {
+      const parsed = paramsStr.split("&").reduce((acc: any, item) => {
+        const [key, value] = item.split("=");
+        if (key && value) {
+          acc[key] = decodeURIComponent(value);
+        }
+        return acc;
+      }, {});
+
+      if (parsed.access_token && parsed.refresh_token) {
+        setGoogleLoading(true);
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: parsed.access_token,
+          refresh_token: parsed.refresh_token,
+        });
+        setGoogleLoading(false);
+
+        if (sessionError) {
+          setGenericAlert({
+            title: "Error en sesión",
+            message: sessionError.message,
+          });
+        } else {
+          router.replace("/(tabs)");
+        }
+      }
+    }
+  };
+
   useEffect(() => {
+    // 1. Escuchar URLs entrantes (Deep Linking) cuando la app ya está abierta
+    const linkingListener = ExpoLinking.addEventListener("url", (event) => {
+      processAuthUrl(event.url);
+    });
+
+    // 2. Verificar la URL inicial por si la app se abrió desde un estado cerrado
+    ExpoLinking.getInitialURL().then((url) => {
+      if (url) processAuthUrl(url);
+    });
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         router.replace("/(tabs)");
@@ -49,7 +97,10 @@ export default function LoginScreen() {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      linkingListener.remove();
+    };
   }, []);
 
   const handleLogin = async () => {
@@ -63,7 +114,7 @@ export default function LoginScreen() {
 
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({
-      email,
+      email: email.trim(),
       password,
     });
     setLoading(false);
@@ -75,6 +126,38 @@ export default function LoginScreen() {
       });
     } else {
       router.replace("/(tabs)");
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setGoogleLoading(true);
+    try {
+      const redirectUrl = ExpoLinking.createURL(""); // Usa el scheme de expo (ej. tuapp://)
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: redirectUrl,
+        },
+      });
+
+      if (error) throw error;
+
+      if (data?.url) {
+        const result = await WebBrowser.openAuthSessionAsync(
+          data.url,
+          redirectUrl,
+        );
+        if (result.type === "success" && result.url) {
+          processAuthUrl(result.url);
+        }
+      }
+    } catch (error: any) {
+      setGenericAlert({
+        title: "Error con Google",
+        message: error.message || "Ocurrió un error al intentar iniciar sesión",
+      });
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -120,12 +203,40 @@ export default function LoginScreen() {
           <TouchableOpacity
             style={[styles.mainButton, loading && { opacity: 0.7 }]}
             onPress={handleLogin}
-            disabled={loading}
+            disabled={loading || googleLoading}
           >
             {loading ? (
               <ActivityIndicator color="#FFF" />
             ) : (
               <Text style={styles.mainButtonText}>Iniciar sesión</Text>
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.dividerContainer}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>O continúa con</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          <TouchableOpacity
+            style={[styles.googleButton, googleLoading && { opacity: 0.7 }]}
+            onPress={handleGoogleLogin}
+            disabled={loading || googleLoading}
+          >
+            {googleLoading ? (
+              <ActivityIndicator color="#000" />
+            ) : (
+              <>
+                <FontAwesome5
+                  name="google"
+                  size={18}
+                  color="#8A5A19"
+                  style={styles.googleIcon}
+                />
+                <Text style={styles.googleButtonText}>
+                  Continuar con Google
+                </Text>
+              </>
             )}
           </TouchableOpacity>
         </View>
@@ -187,6 +298,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 20,
+    marginTop: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
@@ -255,10 +367,50 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "bold",
   },
+  dividerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 20,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: COLORS.secondaryText,
+    opacity: 0.3,
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    fontSize: 14,
+    color: COLORS.secondaryText,
+  },
+  googleButton: {
+    flexDirection: "row",
+    backgroundColor: "#FFF",
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    width: "100%",
+    paddingVertical: 16,
+    borderRadius: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  googleIcon: {
+    marginRight: 10,
+  },
+  googleButtonText: {
+    color: "#333",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
   footerRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 10,
+    marginBottom: 20,
   },
   footerText: {
     color: COLORS.secondaryText,
